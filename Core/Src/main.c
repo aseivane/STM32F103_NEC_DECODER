@@ -18,13 +18,11 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "fonts.h"
-#include "ssd1306.h"
-#include <stdio.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "fonts.h"
+#include "ssd1306.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -34,6 +32,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define TIMCLOCK   72000000
+#define MSG_SIZE 32
 
 #define VPCOM
 #undef DEBUG
@@ -56,6 +56,14 @@ struct NEC NEC1;
 TIM_HandleTypeDef htim1;
 
 /* USER CODE BEGIN PV */
+
+volatile uint32_t times[MSG_SIZE];
+uint8_t times_index = 0;
+volatile uint32_t IC_Val1 = 0;
+volatile uint32_t IC_Val2 = 0;
+volatile uint32_t Difference = 0;
+volatile int Is_First_Captured = 0;
+char msg[10];
 
 /* USER CODE END PV */
 
@@ -93,6 +101,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	}
 }
 
+#ifdef EXTI_NEC
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 	if (GPIO_Pin == NEC_Pin) {
 		NEC1.count = __HAL_TIM_GET_COUNTER(&htim1);
@@ -168,6 +177,48 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 		}
 	}
 }
+#endif
+
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+{
+	if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
+	{
+		if (Is_First_Captured==0) // if the first rising edge is not captured
+		{
+			IC_Val1 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1); // read the first value
+			Is_First_Captured = 1;  // set the first captured as true
+			//__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_RISING);//Set to capture the rising edge
+		}
+
+		else   // If the first rising edge is captured, now we will capture the second edge
+		{
+			IC_Val2 = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);  // read second value
+
+			if (IC_Val2 > IC_Val1)
+			{
+				Difference = IC_Val2-IC_Val1;
+			}
+
+			else if (IC_Val1 > IC_Val2)
+			{
+				Difference = (ARR - IC_Val1) + IC_Val2;
+			}
+
+
+			times[times_index] = Difference;
+
+			__HAL_TIM_SET_COUNTER(htim, 0);  // reset the counter
+			Is_First_Captured = 0; // set it back to false
+			IC_Val1 = 0;
+			IC_Val2 = 0;
+			times_index++;
+			//__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);//Set to capture the rising edge
+		}
+
+		if (MSG_SIZE == times_index)
+			times_index = 0 ;
+	}
+}
 /* USER CODE END 0 */
 
 /**
@@ -203,19 +254,9 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
-  HAL_TIM_Base_Start_IT(&htim1);
-
-
   SSD1306_Init();  // initialise
-
-  SSD1306_GotoXY (0,0);
-  SSD1306_Puts ("HELLO", &Font_11x18, 1);
-  SSD1306_GotoXY (10, 30);
-  SSD1306_Puts ("  WORLD :)", &Font_11x18, 1);
-  SSD1306_UpdateScreen(); //display
-
-  HAL_Delay (2000);
-  SSD1306_Clear();
+  HAL_TIM_Base_Start_IT(&htim1);
+  HAL_TIM_IC_Start_IT(&htim1, TIM_CHANNEL_1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -225,6 +266,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  /*
 	  if (!NEC1.repeat)
 	  {
 		  len = sprintf(BUFF,
@@ -239,7 +281,7 @@ int main(void)
 	  SSD1306_UpdateScreen(); //display
 
 	  HAL_Delay (2000);
-	  SSD1306_Clear();
+	  SSD1306_Clear();*/
   }
   /* USER CODE END 3 */
 }
@@ -331,17 +373,18 @@ static void MX_TIM1_Init(void)
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_IC_InitTypeDef sConfigIC = {0};
 
   /* USER CODE BEGIN TIM1_Init 1 */
 
   /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 719;
+  htim1.Init.Prescaler = PSC;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 65535;
+  htim1.Init.Period = ARR;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
-  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
   {
     Error_Handler();
@@ -351,9 +394,21 @@ static void MX_TIM1_Init(void)
   {
     Error_Handler();
   }
+  if (HAL_TIM_IC_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_FALLING;
+  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
+  sConfigIC.ICFilter = 0;
+  if (HAL_TIM_IC_ConfigChannel(&htim1, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
   {
     Error_Handler();
   }
@@ -387,16 +442,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(LED_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : NEC_Pin */
-  GPIO_InitStruct.Pin = NEC_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(NEC_GPIO_Port, &GPIO_InitStruct);
-
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
 }
 

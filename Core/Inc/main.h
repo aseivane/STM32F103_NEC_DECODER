@@ -70,11 +70,10 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define PSC 17
+#define ARR 65535
 #define LED_Pin GPIO_PIN_13
 #define LED_GPIO_Port GPIOC
-#define NEC_Pin GPIO_PIN_9
-#define NEC_GPIO_Port GPIOB
-#define NEC_EXTI_IRQn EXTI9_5_IRQn
 /* USER CODE BEGIN Private defines */
 
 
